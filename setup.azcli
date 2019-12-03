@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+resourcegroup="ipeventgrid-rg"
+subscriptionid="2295f62b-34e7-40a1-9e9f-6def6b9f20b7"
+sitename="ipeventgrid-ws"
+topicname="iptopic"
+
+# Create resource group
+az group create --name "$resourcegroup" --location eastus2
+
+# Deploy EventGrid Viewer website
+az group deployment create \
+    --resource-group "$resourcegroup" \
+    --template-uri "https://raw.githubusercontent.com/Azure-Samples/azure-event-grid-viewer/master/azuredeploy.json" \
+    --parameters "siteName=$sitename hostingPlanName=viewerhost"
+
+# Register EventGrid provider (if needed)
+az provider register --namespace Microsoft.EventGrid
+az provider show --namespace Microsoft.EventGrid --query "registrationState"
+
+# Create EventGrid topic
+az eventgrid topic create --name "$topicname" --location eastus2 --resource-group "$resourcegroup"
+
+# Subscribe the Viewer to the EventGrid topic 
+endpoint="https://$sitename.azurewebsites.net/api/updates"
+az eventgrid event-subscription create \
+    --source-resource-id "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.EventGrid/topics/$topicname" \
+    --name demoViewerSub \
+    --endpoint "$endpoint"
+
+# Capture EventGrid topic endpoint and auth key
+eventgridendpoint=$(az eventgrid topic show --name "$topicname" --resource-group "$resourcegroup" --query "endpoint" --output tsv)
+eventgridkey=$(az eventgrid topic key list --name "$topicname" --resource-group "$resourcegroup" --query "key1" --output tsv)
+
+# Create and send event
+event='[ {"id": "'"$RANDOM"'", "eventType": "recordInserted", "subject": "myapp/vehicles/motorcycles", "eventTime": "'`date +%Y-%m-%dT%H:%M:%S%z`'", "data":{ "make": "Ducati", "model": "Monster"},"dataVersion": "1.0"} ]'
+curl -X POST -H "aeg-sas-key: $eventgridkey" -d "$event" "$eventgridendpoint"
+
+# Clean up
+az group delete --name "$resourcegroup" --yes
